@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CIDR Subnet Visualizer</title>
+  <style>
+    /* Basic page styling for a clean look */
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+      background-color: #f5f5f5;
+      color: #333;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    /* Input and button styling */
+    #input-container {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+    input[type=text] {
+      font-size: 1rem;
+      padding: 8px 12px;
+      width: 300px;
+      border: 1px solid #ccc;
+      border-radius: 4px 0 0 4px;
+      outline: none;
+    }
+    button {
+      font-size: 1rem;
+      padding: 8px 16px;
+      border: none;
+      background-color: #4CAF50;
+      color: white;
+      cursor: pointer;
+      border-radius: 0 4px 4px 0;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    /* Information block styling */
+    #info-block {
+      margin-bottom: 30px;
+      display: none; /* Hidden until a CIDR is processed */
+      background-color: #fff;
+      padding: 20px;
+      border-radius: 5px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      width: 100%; max-width: 100%;
+      overflow: visible;
+      box-sizing: border-box;
+    }
+    .info-item {
+      margin: 8px 0;
+    }
+    /* Container for the subnet bar */
+    #bar-container {
+      margin-top: 30px;
+      overflow-x: auto; /* Allow horizontal scrolling when many addresses exist */
+      padding-bottom: 10px;
+      background-color: #fff;
+      border-radius: 5px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      width: 100%; max-width: 100%;
+      overflow: visible;
+    }
+    #subnet-bar {
+      display: flex;
+      height: 40px;
+      min-height: 40px;
+      /*
+       * By default the bar spanned the full width of the container, which
+       * resulted in very wide keys when only a handful of IPs were present.
+       * To make the visualization easier to follow, constrain the bar’s
+       * width to one‑third of the container. The bar remains horizontally
+       * centred using margin auto, and horizontal scrolling will still occur
+       * for large subnets when the minimum width of each key cannot fit
+       * within this reduced width.
+       */
+      width: 100%;
+      margin: 0 auto;
+    }
+    /* Base style for each key (address) */
+    .ip-key {
+      border-right: 1px solid #ccc;
+      position: relative;
+      flex: 1 0 auto;
+      /*
+       * Each key’s minimum width is set to a very small value so that the
+       * overall bar remains compact. By default this was 7px, which felt
+       * generous when many addresses were present. To satisfy the request to
+       * shrink each key to roughly one‑third of its previous size we drop
+       * the minimum width down to 2px. The flexBasis percentage applied
+       * later still determines the actual width based on the total number
+       * of IPs, but this value prevents individual keys from growing too
+       * wide on large screens.
+       */
+      min-width: 2px;
+      box-sizing: border-box;
+      background-color: #eaeaea;
+      cursor: default;
+    }
+    .ip-key:last-child {
+      border-right: none;
+    }
+    /* Reserved addresses (network, gateway, broadcast) */
+    .ip-key.reserved {
+      background-color: #dcdcdc;
+      cursor: not-allowed;
+    }
+    /* VIP pool default and used states */
+    .ip-key.vip {
+      background-color: #d1e7dd;
+      cursor: pointer;
+    }
+    .ip-key.vip.used {
+      background-color: #0f5132;
+    }
+    /* Device pool default and used states */
+    .ip-key.device {
+      background-color: #d1dfe9;
+      cursor: pointer;
+    }
+    .ip-key.device.used {
+      background-color: #0d406e;
+    }
+    /* Hover effect to make keys slightly dim when hovering */
+    .ip-key:hover {
+      opacity: 0.85;
+    }
+    /* Tooltip styling */
+    .ip-key .tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      margin-bottom: 6px;
+      background-color: #333;
+      color: #fff;
+      padding: 4px 6px;
+      font-size: 12px;
+      border-radius: 4px;
+      white-space: nowrap;
+      display: none;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .ip-key:hover .tooltip {
+      display: block;
+    }
+    /* Usage and gauge container styling */
+    #usage-container {
+      margin-top: 10px;
+      display: none;
+      background-color: #fff;
+      padding: 10px 20px;
+      border-radius: 5px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      width: 100%; max-width: 100%;
+      overflow: visible;
+      box-sizing: border-box;
+    }
+    .usage-item {
+      margin: 5px 0;
+      font-weight: bold;
+    }
+    .gauge-container {
+      display: flex;
+      justify-content: space-around;
+      width: 100%;
+      max-width: 500px;
+      margin: 0 auto 15px;
+      gap: 40px;
+    }
+    .gauge-chart {
+      width: 150px;
+      height: 150px; /* Half of width for a semi-doughnut */
+    }
+  </style>
+  <!-- Load Chart.js for gauge charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+</head>
+<body>
+  <h1>Subnet Visualizer</h1>
+  <!-- Input and button for CIDR entry -->
+  <div id="input-container">
+    <input type="text" id="cidr-input" placeholder="Enter CIDR (e.g., 192.168.1.0/24)">
+    <button id="generate-btn">Generate</button>
+  </div>
+  <!-- Information block that appears after generation -->
+  <div id="info-block"></div>
+  <!-- Horizontal bar container for visualizing each IP address -->
+  <div id="bar-container">
+    <div id="subnet-bar"></div>
+  </div>
+  <!-- Usage statistics and gauges container -->
+  <div id="usage-container">
+    <div class="gauge-container">
+      <canvas id="vipGauge" class="gauge-chart"></canvas>
+      <canvas id="deviceGauge" class="gauge-chart"></canvas>
+    </div>
+    <div id="usage-text"></div>
+  </div>
+
+  <script>
+    // Global Chart objects
+    var vipChart = null;
+    var deviceChart = null;
+
+    // Convert dotted decimal IP to a 32‑bit integer
+    function ipToInt(ip) {
+      var parts = ip.split('.').map(Number);
+      if (parts.length !== 4 || parts.some(function(p) { return p < 0 || p > 255 || isNaN(p); })) {
+        return null;
+      }
+      return ((parts[0] << 24) >>> 0) + ((parts[1] << 16) >>> 0) + ((parts[2] << 8) >>> 0) + (parts[3] >>> 0);
+    }
+    // Convert a 32‑bit integer back to dotted decimal IP
+    function intToIp(int) {
+      return [
+        (int >>> 24) & 0xFF,
+        (int >>> 16) & 0xFF,
+        (int >>> 8) & 0xFF,
+        int & 0xFF
+      ].join('.');
+    }
+    // Calculate subnet details from CIDR input
+    function calculateInfo(cidr) {
+      var parts = cidr.split('/');
+      if (parts.length !== 2) return null;
+      var networkStr = parts[0].trim();
+      var prefix = parseInt(parts[1]);
+      if (prefix < 0 || prefix > 32 || isNaN(prefix)) return null;
+      var networkInt = ipToInt(networkStr);
+      if (networkInt === null) return null;
+      // Create subnet mask from prefix length
+      var mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+      // Ensure the provided address is the actual network address
+      var calculatedNetwork = networkInt & mask;
+      if (calculatedNetwork !== networkInt) {
+        // Adjust to the correct network address if misaligned
+        networkInt = calculatedNetwork;
+      }
+      var broadcastInt = networkInt | (~mask >>> 0);
+      var totalAddresses = (broadcastInt - networkInt + 1) >>> 0;
+      // Number of usable addresses (excluding network and broadcast)
+      var usableCount = totalAddresses - 2;
+      var gatewayInt = null;
+      if (usableCount >= 1) {
+        gatewayInt = networkInt + 1;
+      }
+      var vipRange = null;
+      var deviceRange = null;
+      if (usableCount >= 2) {
+        // After gateway, how many addresses remain?
+        var remaining = usableCount - 1;
+        var vipCount = Math.floor(remaining * 0.33);
+        var vipStart = gatewayInt + 1;
+        var vipEnd = vipStart + vipCount - 1;
+        var deviceStart;
+        // If VIP pool has at least one address
+        if (vipCount > 0) {
+          vipRange = {start: vipStart, end: vipEnd};
+          deviceStart = vipEnd + 1;
+        } else {
+          deviceStart = gatewayInt + 1;
+        }
+        var deviceEnd = broadcastInt - 1;
+        if (deviceStart <= deviceEnd) {
+          deviceRange = {start: deviceStart, end: deviceEnd};
+        }
+      }
+      return {
+        networkInt: networkInt,
+        broadcastInt: broadcastInt,
+        gatewayInt: gatewayInt,
+        vipRange: vipRange,
+        deviceRange: deviceRange,
+        totalAddresses: totalAddresses,
+        usableCount: usableCount
+      };
+    }
+    // Build the horizontal bar, one key per IP
+    function createBar(info) {
+      var bar = document.getElementById('subnet-bar');
+      bar.innerHTML = '';
+      var total = info.totalAddresses;
+      var networkInt = info.networkInt;
+      var broadcastInt = info.broadcastInt;
+      var vipRange = info.vipRange;
+      var deviceRange = info.deviceRange;
+      var gatewayInt = info.gatewayInt;
+      // Use percentage so the bar scales regardless of total addresses
+      var keyWidthPercent = 100 / total;
+      for (let i = 0; i < total; i++) {
+        var ipInt = networkInt + i;
+        var key = document.createElement('div');
+        key.classList.add('ip-key');
+        // Determine the type of address (reserved, vip, device)
+        var ipType;
+        if (i === 0 || ipInt === broadcastInt) {
+          ipType = 'reserved';
+          key.classList.add('reserved');
+        } else if (gatewayInt !== null && ipInt === gatewayInt) {
+          ipType = 'reserved';
+          key.classList.add('reserved');
+        } else if (vipRange && ipInt >= vipRange.start && ipInt <= vipRange.end) {
+          ipType = 'vip';
+          key.classList.add('vip');
+        } else if (deviceRange && ipInt >= deviceRange.start && ipInt <= deviceRange.end) {
+          ipType = 'device';
+          key.classList.add('device');
+        } else {
+          // Shouldn't reach here normally; mark as reserved for safety
+          ipType = 'reserved';
+          key.classList.add('reserved');
+        }
+        // Set width via flex-basis percentage
+        key.style.flexBasis = keyWidthPercent + '%';
+        // Assign data attributes for event handling
+        key.dataset.ip = intToIp(ipInt);
+        key.dataset.type = ipType;
+        key.dataset.used = 'false';
+        // Also set a native title attribute so the browser shows a tooltip even
+        // without custom CSS. This addresses cases where the custom tooltip
+        // might not appear due to scaling or other display issues.
+        key.title = key.dataset.ip;
+        // Create tooltip element
+        var tooltip = document.createElement('div');
+        tooltip.classList.add('tooltip');
+        tooltip.textContent = key.dataset.ip;
+        key.appendChild(tooltip);
+        // Toggle used/unused on click for VIP and device pools
+        key.addEventListener('click', function() {
+          var type = this.dataset.type;
+          if (type === 'vip' || type === 'device') {
+            if (this.dataset.used === 'false') {
+              this.dataset.used = 'true';
+              this.classList.add('used');
+            } else {
+              this.dataset.used = 'false';
+              this.classList.remove('used');
+            }
+            updateUsage(info);
+          }
+        });
+        bar.appendChild(key);
+      }
+    }
+    // Populate the information block
+    function updateInfoBlock(info, cidr) {
+      var block = document.getElementById('info-block');
+      block.innerHTML = '';
+      if (!info) {
+        block.style.display = 'none';
+        return;
+      }
+      block.style.display = 'block';
+      var networkAddr = intToIp(info.networkInt);
+      var broadcastAddr = intToIp(info.broadcastInt);
+      var gatewayAddr = info.gatewayInt !== null ? intToIp(info.gatewayInt) : 'N/A';
+      var vipRange = info.vipRange ? intToIp(info.vipRange.start) + ' – ' + intToIp(info.vipRange.end) : 'N/A';
+      var deviceRange = info.deviceRange ? intToIp(info.deviceRange.start) + ' – ' + intToIp(info.deviceRange.end) : 'N/A';
+      var items = [
+        {label: 'CIDR:', value: cidr},
+        {label: 'Network Address:', value: networkAddr},
+        {label: 'Broadcast Address:', value: broadcastAddr},
+        {label: 'Gateway Address:', value: gatewayAddr},
+        {label: 'VIP Pool Range:', value: vipRange},
+        {label: 'Device Pool Range:', value: deviceRange}
+      ];
+      items.forEach(function(item) {
+        var div = document.createElement('div');
+        div.classList.add('info-item');
+        div.innerHTML = '<strong>' + item.label + '</strong> ' + item.value;
+        block.appendChild(div);
+      });
+    }
+    // Create or update a semi-doughnut gauge chart
+    function renderGauge(ctx, used, total, label, colors, chartRef) {
+      var available = Math.max(total - used, 0);
+      var data = [used, available];
+      // If chart already exists, update its data and title
+      if (chartRef && chartRef instanceof Chart) {
+        chartRef.data.datasets[0].data = data;
+        chartRef.options.plugins.title.text = label + ' (' + used + '/' + total + ')';
+        chartRef.update();
+        return chartRef;
+      }
+      // Create a new semi‑doughnut chart
+      var config = {
+        type: 'doughnut',
+        data: {
+          datasets: [{
+            data: data,
+            backgroundColor: colors,
+            borderWidth: 0
+          }]
+        },
+        options: {
+          cutout: '70%',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { enabled: false },
+            title: {
+              display: true,
+              text: label + ' (' + used + '/' + total + ')',
+              padding: { top: 0, bottom: 0 },
+              font: { size: 14 }
+            }
+          }
+        }
+      };
+      return new Chart(ctx, config);
+    }
+    // Calculate and display pool usage statistics and update gauges
+    function updateUsage(info) {
+      var usageContainer = document.getElementById('usage-container');
+      var usageTextDiv = document.getElementById('usage-text');
+      usageTextDiv.innerHTML = '';
+      if (!info) {
+        usageContainer.style.display = 'none';
+        return;
+      }
+      var vipTotal = 0, vipUsed = 0;
+      var deviceTotal = 0, deviceUsed = 0;
+      var keys = document.querySelectorAll('.ip-key');
+      keys.forEach(function(key) {
+        var type = key.dataset.type;
+        if (type === 'vip') {
+          vipTotal++;
+          if (key.dataset.used === 'true') vipUsed++;
+        } else if (type === 'device') {
+          deviceTotal++;
+          if (key.dataset.used === 'true') deviceUsed++;
+        }
+      });
+      usageContainer.style.display = 'block';
+      // Determine color for text based on percentage thresholds
+      function getColor(percentage) {
+        if (percentage >= 85) return 'red';
+        if (percentage >= 70) return 'orange';
+        return 'black';
+      }
+      var vipPercentage = vipTotal ? (vipUsed / vipTotal * 100).toFixed(1) : 0;
+      var devicePercentage = deviceTotal ? (deviceUsed / deviceTotal * 100).toFixed(1) : 0;
+      var vipItem = document.createElement('div');
+      vipItem.classList.add('usage-item');
+      vipItem.style.color = getColor(vipPercentage);
+      vipItem.textContent = 'VIP pool usage: ' + vipUsed + '/' + vipTotal + ' (' + vipPercentage + '%)';
+      var deviceItem = document.createElement('div');
+      deviceItem.classList.add('usage-item');
+      deviceItem.style.color = getColor(devicePercentage);
+      deviceItem.textContent = 'Device pool usage: ' + deviceUsed + '/' + deviceTotal + ' (' + devicePercentage + '%)';
+      usageTextDiv.appendChild(vipItem);
+      usageTextDiv.appendChild(deviceItem);
+      // Render or update gauge charts
+      var vipCtx = document.getElementById('vipGauge').getContext('2d');
+      vipChart = renderGauge(vipCtx, vipUsed, vipTotal, 'VIP Pool', ['#0f5132', '#d1e7dd'], vipChart);
+      var deviceCtx = document.getElementById('deviceGauge').getContext('2d');
+      deviceChart = renderGauge(deviceCtx, deviceUsed, deviceTotal, 'Device Pool', ['#0d406e', '#d1dfe9'], deviceChart);
+    }
+    // Event handler for the generate button
+    document.getElementById('generate-btn').addEventListener('click', function() {
+      var cidr = document.getElementById('cidr-input').value.trim();
+      var info = calculateInfo(cidr);
+      if (!info) {
+        alert('Invalid CIDR. Please enter in format X.X.X.X/YY, with valid octets and prefix.');
+        return;
+      }
+      updateInfoBlock(info, cidr);
+      createBar(info);
+      updateUsage(info);
+    });
+  </script>
+</body>
+</html>
